@@ -1,18 +1,17 @@
-import os
+mport os
 import json
 import html
 import urllib.parse
 import urllib.request
-from typing import Set, Optional, Dict, Any
+from typing import Set, Optional, Dict, Any, Tuple
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 
 app = FastAPI()
 
 clients: Set[WebSocket] = set()
 ADMIN_KEY = os.getenv("ADMIN_KEY", "TRIUMPH_ADMIN")
 
-# Google Cloud Translation API key stays ONLY on Render.
 GOOGLE_TRANSLATE_API_KEY = os.getenv("GOOGLE_TRANSLATE_API_KEY", "").strip()
 TRANSLATE_TARGET = os.getenv("TRANSLATE_TARGET", "zh-CN").strip() or "zh-CN"
 TRANSLATE_SOURCE = os.getenv("TRANSLATE_SOURCE", "en").strip() or "en"
@@ -33,38 +32,57 @@ async def health():
     }
 
 
-def translate_text_google(text: str) -> str:
-    """Translate with Google Cloud Translation Basic v2.
+@app.get("/translate-test")
+async def translate_test(q: str = Query("enemy north push mid")):
+    translated, error = translate_text_google(q)
+    return {
+        "input": q,
+        "translated": translated,
+        "error": error,
+        "google_translate": bool(GOOGLE_TRANSLATE_API_KEY),
+        "target": TRANSLATE_TARGET,
+    }
 
-    Fallback behavior: if the API key is missing or Google errors, return "".
-    The overlay will then show the original English message.
-    """
+
+def translate_text_google(text: str) -> Tuple[str, str]:
+    """Returns (translated_text, error_message)."""
     clean = str(text or "").strip()
-    if not clean or not GOOGLE_TRANSLATE_API_KEY:
-        return ""
+    if not clean:
+        return "", "empty text"
+
+    if not GOOGLE_TRANSLATE_API_KEY:
+        return "", "missing GOOGLE_TRANSLATE_API_KEY"
 
     cache_key = f"{TRANSLATE_SOURCE}->{TRANSLATE_TARGET}:{clean}"
     if cache_key in translation_cache:
-        return translation_cache[cache_key]
+        return translation_cache[cache_key], ""
 
     try:
+        # Put the API key in the URL query string. This is the most reliable
+        # format for Google Translation Basic v2.
+        url = (
+            "https://translation.googleapis.com/language/translate/v2"
+            + "?key="
+            + urllib.parse.quote(GOOGLE_TRANSLATE_API_KEY)
+        )
+
         data = urllib.parse.urlencode({
             "q": clean,
             "source": TRANSLATE_SOURCE,
             "target": TRANSLATE_TARGET,
             "format": "text",
-            "key": GOOGLE_TRANSLATE_API_KEY,
         }).encode("utf-8")
 
         req = urllib.request.Request(
-            "https://translation.googleapis.com/language/translate/v2",
+            url,
             data=data,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
 
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            payload = json.loads(raw)
 
         translated = (
             payload.get("data", {})
@@ -73,16 +91,20 @@ def translate_text_google(text: str) -> str:
         )
 
         translated = html.unescape(str(translated)).strip()
-        if translated:
-            # Tiny cache; enough for repeated PvP calls, avoids unnecessary API calls.
-            if len(translation_cache) > 500:
-                translation_cache.clear()
-            translation_cache[cache_key] = translated
-        return translated
+
+        if not translated:
+            return "", "Google response did not contain translatedText"
+
+        if len(translation_cache) > 500:
+            translation_cache.clear()
+        translation_cache[cache_key] = translated
+
+        return translated, ""
 
     except Exception as e:
-        print("[translate error]", repr(e), flush=True)
-        return ""
+        err = repr(e)
+        print("[translate error]", err, flush=True)
+        return "", err
 
 
 async def safe_send(ws: WebSocket, message: dict) -> bool:
@@ -111,7 +133,6 @@ async def websocket_handler(websocket: WebSocket):
     await websocket.accept()
     clients.add(websocket)
 
-    # Send last known Argo to every newly connected overlay.
     if last_argo_update is not None:
         await safe_send(websocket, last_argo_update)
 
@@ -126,19 +147,21 @@ async def websocket_handler(websocket: WebSocket):
 
             msg_type = data.get("type")
 
-            # Only RL/admin may push alerts or Argo sync.
             if msg_type in ("alert", "argo_update"):
                 if data.get("admin_key") != ADMIN_KEY:
                     continue
 
             if msg_type == "alert":
                 original = str(data.get("text", "ALERT")).strip() or "ALERT"
-                translated_zh = translate_text_google(original)
+                translated_zh, translate_error = translate_text_google(original)
 
+                # Important: old users still use "text". Chinese users use "text_zh".
                 await broadcast({
                     "type": "alert",
                     "text": original,
                     "text_zh": translated_zh,
+                    "translated_text": translated_zh,
+                    "translate_error": translate_error,
                     "sender": data.get("sender", "Unknown"),
                 })
 
