@@ -7,8 +7,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 app = FastAPI()
 
 clients: Set[WebSocket] = set()
-
 ADMIN_KEY = os.getenv("ADMIN_KEY", "TRIUMPH_ADMIN")
+
+last_argo_update = None
 
 
 @app.get("/")
@@ -17,9 +18,8 @@ async def health():
 
 
 async def broadcast(message: dict):
-    dead = []
-
     text = json.dumps(message)
+    dead = []
 
     for ws in list(clients):
         try:
@@ -32,8 +32,17 @@ async def broadcast(message: dict):
 
 
 async def websocket_handler(websocket: WebSocket):
+    global last_argo_update
+
     await websocket.accept()
     clients.add(websocket)
+
+    # Envoie automatiquement le dernier Argo au user qui vient de se connecter
+    if last_argo_update is not None:
+        try:
+            await websocket.send_text(json.dumps(last_argo_update))
+        except Exception:
+            pass
 
     try:
         while True:
@@ -46,7 +55,6 @@ async def websocket_handler(websocket: WebSocket):
 
             msg_type = data.get("type")
 
-            # Seuls les RL/admin peuvent envoyer
             if msg_type in ("alert", "argo_update"):
                 if data.get("admin_key") != ADMIN_KEY:
                     continue
@@ -59,11 +67,13 @@ async def websocket_handler(websocket: WebSocket):
                 })
 
             elif msg_type == "argo_update":
-                await broadcast({
+                last_argo_update = {
                     "type": "argo_update",
                     "death_time": data.get("death_time"),
                     "sender": data.get("sender", "Unknown"),
-                })
+                }
+
+                await broadcast(last_argo_update)
 
     except WebSocketDisconnect:
         pass
