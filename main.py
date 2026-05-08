@@ -1,6 +1,6 @@
 import os
 import json
-from typing import Set
+from typing import Set, Optional, Dict, Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
@@ -9,22 +9,33 @@ app = FastAPI()
 clients: Set[WebSocket] = set()
 ADMIN_KEY = os.getenv("ADMIN_KEY", "TRIUMPH_ADMIN")
 
-last_argo_update = None
+last_argo_update: Optional[Dict[str, Any]] = None
 
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "service": "Aion Alert Server"}
+    return {
+        "status": "ok",
+        "service": "Aion Alert Server",
+        "clients": len(clients),
+        "has_argo": last_argo_update is not None,
+    }
+
+
+async def safe_send(ws: WebSocket, message: dict) -> bool:
+    try:
+        await ws.send_text(json.dumps(message))
+        return True
+    except Exception:
+        return False
 
 
 async def broadcast(message: dict):
-    text = json.dumps(message)
     dead = []
 
     for ws in list(clients):
-        try:
-            await ws.send_text(text)
-        except Exception:
+        ok = await safe_send(ws, message)
+        if not ok:
             dead.append(ws)
 
     for ws in dead:
@@ -37,12 +48,8 @@ async def websocket_handler(websocket: WebSocket):
     await websocket.accept()
     clients.add(websocket)
 
-    # Envoie automatiquement le dernier Argo au user qui vient de se connecter
     if last_argo_update is not None:
-        try:
-            await websocket.send_text(json.dumps(last_argo_update))
-        except Exception:
-            pass
+        await safe_send(websocket, last_argo_update)
 
     try:
         while True:
@@ -72,7 +79,6 @@ async def websocket_handler(websocket: WebSocket):
                     "death_time": data.get("death_time"),
                     "sender": data.get("sender", "Unknown"),
                 }
-
                 await broadcast(last_argo_update)
 
     except WebSocketDisconnect:
@@ -83,11 +89,11 @@ async def websocket_handler(websocket: WebSocket):
         clients.discard(websocket)
 
 
-@app.websocket("/")
-async def websocket_root(websocket: WebSocket):
+@app.websocket("/ws")
+async def websocket_ws(websocket: WebSocket):
     await websocket_handler(websocket)
 
 
-@app.websocket("/ws")
-async def websocket_ws(websocket: WebSocket):
+@app.websocket("/")
+async def websocket_root(websocket: WebSocket):
     await websocket_handler(websocket)
