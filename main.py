@@ -1,4 +1,4 @@
-mport os
+import os
 import json
 import html
 import urllib.parse
@@ -45,8 +45,8 @@ async def translate_test(q: str = Query("enemy north push mid")):
 
 
 def translate_text_google(text: str) -> Tuple[str, str]:
-    """Returns (translated_text, error_message)."""
     clean = str(text or "").strip()
+
     if not clean:
         return "", "empty text"
 
@@ -58,8 +58,6 @@ def translate_text_google(text: str) -> Tuple[str, str]:
         return translation_cache[cache_key], ""
 
     try:
-        # Put the API key in the URL query string. This is the most reliable
-        # format for Google Translation Basic v2.
         url = (
             "https://translation.googleapis.com/language/translate/v2"
             + "?key="
@@ -81,8 +79,7 @@ def translate_text_google(text: str) -> Tuple[str, str]:
         )
 
         with urllib.request.urlopen(req, timeout=5) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            payload = json.loads(raw)
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
 
         translated = (
             payload.get("data", {})
@@ -93,12 +90,12 @@ def translate_text_google(text: str) -> Tuple[str, str]:
         translated = html.unescape(str(translated)).strip()
 
         if not translated:
-            return "", "Google response did not contain translatedText"
+            return "", "Google response missing translatedText"
 
         if len(translation_cache) > 500:
             translation_cache.clear()
-        translation_cache[cache_key] = translated
 
+        translation_cache[cache_key] = translated
         return translated, ""
 
     except Exception as e:
@@ -155,7 +152,8 @@ async def websocket_handler(websocket: WebSocket):
                 original = str(data.get("text", "ALERT")).strip() or "ALERT"
                 translated_zh, translate_error = translate_text_google(original)
 
-                # Important: old users still use "text". Chinese users use "text_zh".
+                # Old users keep reading "text" in English.
+                # Chinese users read "text_zh".
                 await broadcast({
                     "type": "alert",
                     "text": original,
