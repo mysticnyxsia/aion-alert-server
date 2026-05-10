@@ -1,26 +1,39 @@
-import asyncio
 import json
-import os
 import time
+from typing import Set
 
-import websockets
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
-CLIENTS = set()
+app = FastAPI()
+CLIENTS: Set[WebSocket] = set()
+
 
 async def broadcast(message: str):
     dead = []
     for client in list(CLIENTS):
         try:
-            await client.send(message)
+            await client.send_text(message)
         except Exception:
             dead.append(client)
+
     for client in dead:
         CLIENTS.discard(client)
 
-async def handler(websocket):
+
+@app.get("/")
+async def health_check():
+    return {"status": "ok", "service": "AionWatcher websocket server"}
+
+
+@app.websocket("/")
+async def websocket_root(websocket: WebSocket):
+    await websocket.accept()
     CLIENTS.add(websocket)
+
     try:
-        async for message in websocket:
+        while True:
+            message = await websocket.receive_text()
+
             try:
                 data = json.loads(message)
             except Exception:
@@ -29,9 +42,9 @@ async def handler(websocket):
             msg_type = data.get("type")
 
             # Render server clock sync for AionWatcher clients.
-            # The client uses this to correct bad Windows clocks.
+            # Client uses this to correct bad Windows clocks.
             if msg_type == "time_sync_request":
-                await websocket.send(json.dumps({
+                await websocket.send_text(json.dumps({
                     "type": "time_sync_response",
                     "client_ms": data.get("client_ms"),
                     "server_ms": int(time.time() * 1000)
@@ -48,14 +61,9 @@ async def handler(websocket):
                 await broadcast(message)
                 continue
 
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
     finally:
         CLIENTS.discard(websocket)
-
-async def main():
-    port = int(os.environ.get("PORT", "10000"))
-    async with websockets.serve(handler, "0.0.0.0", port, ping_interval=25, ping_timeout=10):
-        print(f"Aion alert server running on port {port}", flush=True)
-        await asyncio.Future()
-
-if __name__ == "__main__":
-    asyncio.run(main())
