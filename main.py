@@ -3279,3 +3279,35 @@ def main():
 if __name__ == "__main__":
     ensure_single_instance()
     main()
+
+def main():
+    global config
+
+    config = load_config()
+
+    # =========================
+    # Remote config
+    # =========================
+    try:
+        remote_config = requests.get(
+            REMOTE_CONFIG_URL,
+            timeout=5
+        ).json()
+
+        config.update(remote_config)
+
+        print("Remote config loaded.")
+
+    except Exception as e:
+        print("Remote config failed:", e)
+
+    # =========================
+    # Start application
+    # =========================
+    app = QApplication(sys.argv)
+
+    watcher = AionWatcher()
+
+    watcher.show()
+
+    sys.exit(app.exec())
