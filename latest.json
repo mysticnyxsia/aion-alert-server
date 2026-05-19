@@ -1,5 +1,33 @@
 {
-  "version": "1.0.1",
-  "download_url": "https://ton-lien.com/AionWatcher.exe",
-  "message": "Updated siege timers and added new events."
+  "schedule": {
+
+    "rift_hours_tw": [2,5,8,11,14,17,20,23],
+
+    "battlefield_windows_tw": [
+      [11,0,14,0],
+      [20,0,22,0]
+    ],
+
+    "siege": {
+      "weekdays_tw": [2,5],
+      "hour_tw": 22,
+      "minute_tw": 0
+    },
+
+    "post_siege": {
+      "hour_tw": 22,
+      "minute_tw": 30
+    },
+
+    "nahma": {
+      "weekdays_tw": [4,6],
+      "hour_tw": 22,
+      "minute_tw": 0
+    },
+
+    "daily_reset": {
+      "hour_tw": 5,
+      "minute_tw": 0
+    }
+  }
 }
